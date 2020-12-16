@@ -53,8 +53,6 @@ func (c *AddTVShowConversation) AskTVShow(m *tb.Message) Handler {
 		TVShows, err := c.env.Sonarr.SearchTVShows(c.TVQuery)
 		c.TVShowResults = TVShows
 
-		// TODO merge lookup with existing series and set the monitored status correctly
-
 		// Search Service Failed
 		if err != nil {
 			fmt.Println(err)
@@ -109,6 +107,23 @@ func (c *AddTVShowConversation) AskPickTVShow(m *tb.Message) Handler {
 			return
 		}
 
+		// Mark all seasons unmonitored from lookup
+		for i := 0; i < len(c.selectedTVShow.Seasons); i++ {
+			c.selectedTVShow.Seasons[i].Monitored = false
+		}
+
+		// merge seasons from the show if it already exists in Sonarr
+		var currentShows, err = c.env.Sonarr.GetTVShows()
+
+		if currentShows != nil && err == nil {
+			for _, show := range currentShows {
+				if show.TVDBID == c.selectedTVShow.TVDBID {
+					c.selectedTVShow.Seasons = show.Seasons
+					break
+				}
+			}
+		}
+
 		c.currentStep = c.AskPickTVShowSeason(m)
 	}
 }
@@ -136,13 +151,22 @@ func (c *AddTVShowConversation) AskPickTVShowSeason(m *tb.Message) Handler {
 		options = append(options, "Nope. I'm done!")
 	}
 
+	var seasonCount int = 0
 	for _, season := range c.selectedTVShow.Seasons {
-		if !c.isSelectedSeason(season) && season.SeasonNumber > 0 {
+		if !c.isSelectedSeason(season) && season.SeasonNumber > 0 && !season.Monitored {
 			options = append(options, fmt.Sprintf("%v", season.SeasonNumber))
+			seasonCount++
 		}
 	}
 
+	if seasonCount == 0 && len(c.selectedTVShowSeasons) == 0 {
+		SendError(c.env.Bot, m.Sender, "No seasons left in this show to add.")
+		c.env.CM.StopConversation(c)
+		return nil
+	}
+
 	options = append(options, "/cancel")
+
 	if len(c.selectedTVShowSeasons) > 0 {
 		SendKeyboardList(c.env.Bot, m.Sender, "Any other season?", options)
 	} else {
